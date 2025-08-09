@@ -4,9 +4,9 @@
 from pathlib import Path
 from typing import override
 
-from .base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
-from .ckg.ckg_database import CKGDatabase
-from .run import MAX_RESPONSE_LEN
+from dev_tools_mcp.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
+from dev_tools_mcp.tools.ckg.ckg_database import CKGDatabase
+from dev_tools_mcp.tools.run import MAX_RESPONSE_LEN
 
 CKGToolCommands = ["search_function", "search_class", "search_class_method"]
 

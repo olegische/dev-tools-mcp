@@ -5,7 +5,7 @@ Configuration and dependency management for the Dev Tools MCP server.
 import logging
 from functools import lru_cache
 
-from .config import ServiceConfig
+from dev_tools_mcp.utils.config import ServiceConfig
 
 logger = logging.getLogger(__name__)
 

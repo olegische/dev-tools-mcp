@@ -3,7 +3,7 @@
 
 from typing import override
 
-from .base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
+from dev_tools_mcp.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
 
 
 class TaskDoneTool(Tool):

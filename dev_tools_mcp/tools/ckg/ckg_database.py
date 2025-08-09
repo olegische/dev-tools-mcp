@@ -12,7 +12,7 @@ from typing import Literal
 from tree_sitter import Node, Parser
 from tree_sitter_languages import get_parser
 
-from .base import ClassEntry, FunctionEntry, extension_to_language
+from dev_tools_mcp.tools.ckg.base import ClassEntry, FunctionEntry, extension_to_language
 from dev_tools_mcp.utils.constants import LOCAL_STORAGE_PATH
 
 CKG_DATABASE_PATH = LOCAL_STORAGE_PATH / "ckg"

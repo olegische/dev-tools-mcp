@@ -12,10 +12,10 @@ from starlette.middleware import Middleware
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from .prompts import get_prompts
-from .tools.base import Tool
-from .utils.config import ServiceConfig
-from .utils.dependencies import (
+from dev_tools_mcp.prompts import get_prompts
+from dev_tools_mcp.tools.base import Tool
+from dev_tools_mcp.utils.config import ServiceConfig
+from dev_tools_mcp.utils.dependencies import (
     get_base_config,
     get_bash_tool_provider,
     get_file_editor_tool_provider,

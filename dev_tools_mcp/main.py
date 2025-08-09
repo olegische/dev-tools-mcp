@@ -38,7 +38,7 @@ def run_server() -> None:
         sys.exit(1)
 
     # Import server components after setup to ensure environment is loaded first.
-    from .server import mcp_app, server_config
+    from dev_tools_mcp.server import mcp_app, server_config
 
     logger = logging.getLogger(__name__)
     logger.info(f"--- Mattermost MCP Server ---")
