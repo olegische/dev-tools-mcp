@@ -43,6 +43,14 @@ uv-test:
 test:
 	uv run pytest
 
+# Build command
+build-wheel:
+	@echo "Cleaning up old builds..."
+	rm -rf dist
+	@echo "Building the wheel..."
+	uv pip install build
+	uv run python -m build
+
 # Clean up
 clean:
 	rm -rf build/

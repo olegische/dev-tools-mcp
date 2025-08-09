@@ -3,7 +3,7 @@ name = "dev-tools-mcp"
 version = "0.1.0"
 description = "A standalone MCP server providing a toolkit for software development."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = "~=3.12"
 authors = [
     {name = "Oleg Romanchuk", email = "olromanchuk@gmail.com"},
 ]
@@ -24,6 +24,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",
     "tree-sitter==0.21.3",
+    "tree-sitter-languages<=1.10.2",
     "mcp>=1.12.4",
     "fastapi>=0.115.14",
     "uvicorn>=0.27.1,<1.0.0",
@@ -47,7 +48,7 @@ test = [
 ]
 
 [project.scripts]
-dev-tools-server = "dev_tools_mcp.main:run_server"
+dev-tools-mcp = "dev_tools_mcp.main:run_server"
 
 [build-system]
 requires = ["hatchling"]
