@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from trae_agent.tools.base import ToolCallArguments
-from trae_agent.tools.edit_tool import TextEditorTool
+from dev_tools_mcp.tools.base import ToolCallArguments
+from dev_tools_mcp.tools.edit_tool import TextEditorTool
 
 
 class TestTextEditorTool(unittest.IsolatedAsyncioTestCase):
