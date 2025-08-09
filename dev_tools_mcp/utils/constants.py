@@ -3,4 +3,4 @@
 
 from pathlib import Path
 
-LOCAL_STORAGE_PATH = Path.home() / ".trae-agent"
+LOCAL_STORAGE_PATH = Path.home() / ".dev-tools-agent"

@@ -5,13 +5,27 @@ MCP server definition for the Dev Tools MCP.
 import logging
 from typing import Any, List, Optional
 
+from fastapi import Depends
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from .prompts import get_prompts
+from .tools.base import Tool
 from .utils.config import ServiceConfig
+from .utils.dependencies import (
+    get_base_config,
+    get_bash_tool_provider,
+    get_file_editor_tool_provider,
+    get_json_editor_tool_provider,
+    get_code_search_tool_provider,
+    get_git_tool_provider,
+    get_sequential_thinking_tool_provider,
+    get_task_done_tool_provider,
+)
+
 
 # Get a module-level logger
 logger = logging.getLogger(__name__)
@@ -65,27 +79,18 @@ def build_server(config: ServiceConfig) -> CustomFastMCP:
         port=config.MCP_PORT,
     )
 
-
-# Import dependency providers
-from fastapi import Depends
-from .utils.dependencies import (
-    get_base_config,
-    get_bash_tool_provider,
-    get_file_editor_tool_provider,
-    get_json_editor_tool_provider,
-    get_code_search_tool_provider,
-    get_git_tool_provider,
-    get_sequential_thinking_tool_provider,
-    get_task_done_tool_provider,
-)
-from .tools.base import Tool
-
-
 # Get the base configuration for server initialization.
 # This is also imported by main.py to run the server.
 server_config = get_base_config()
 mcp_app = build_server(server_config)
 
+
+# --- Prompt Handlers ---
+@mcp_app.prompt(title="Agent System Prompt for Dev Tools")
+def get_system_prompt() -> str:
+    """Provides the main system prompt for the agent."""
+    prompts = get_prompts()
+    return prompts["agent-system-prompt"]
 
 # --- Tool Definitions ---
 
