@@ -1,7 +1,7 @@
 [project]
-name = "trae-agent"
+name = "coding-tools-mcp"
 version = "0.1.0"
-description = "LLM-based agent for general purpose software engineering tasks"
+description = "MCP server for general purpose software engineering tasks"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
