@@ -99,7 +99,6 @@ async def bash(
     context: Context,
     command: str,
     restart: bool = False,
-    bash_tool: Tool = Depends(get_bash_tool_provider),
 ) -> dict[str, Any]:
     """
     Executes a shell command in a persistent session.
@@ -113,6 +112,7 @@ async def bash(
     """
     logger.info(f"Executing bash command: {command}")
     try:
+        bash_tool = get_bash_tool_provider()
         # The `execute` method of the tool expects a single dictionary of arguments.
         args = {"command": command, "restart": restart}
         result = await bash_tool.execute(args)
@@ -137,7 +137,6 @@ async def file_editor_tool(
     new_str: Optional[str] = None,
     insert_line: Optional[int] = None,
     view_range: Optional[List[int]] = None,
-    editor_tool: Tool = Depends(get_file_editor_tool_provider),
 ) -> dict[str, Any]:
     """
     A powerful tool for file manipulation (view, create, str_replace, insert).
@@ -156,6 +155,7 @@ async def file_editor_tool(
     """
     logger.info(f"Executing file_editor command '{command}' on path '{path}'")
     try:
+        editor_tool = get_file_editor_tool_provider()
         args = {
             "command": command,
             "path": path,
@@ -186,7 +186,6 @@ async def json_editor(
     json_path: Optional[str] = None,
     value: Optional[Any] = None,
     pretty_print: bool = True,
-    json_editor_tool: Tool = Depends(get_json_editor_tool_provider),
 ) -> dict[str, Any]:
     """
     Tool for editing JSON files with JSONPath expressions.
@@ -203,6 +202,7 @@ async def json_editor(
     """
     logger.info(f"Executing json_editor operation '{operation}' on file '{file_path}'")
     try:
+        json_editor_tool = get_json_editor_tool_provider()
         args = {
             "operation": operation,
             "file_path": file_path,
@@ -230,7 +230,6 @@ async def code_search_tool(
     path: str,
     identifier: str,
     print_body: bool = True,
-    ckg_tool: Tool = Depends(get_code_search_tool_provider),
 ) -> dict[str, Any]:
     """
     Query the code knowledge graph of a codebase.
@@ -246,6 +245,7 @@ async def code_search_tool(
     """
     logger.info(f"Executing code_search command '{command}' on path '{path}'")
     try:
+        ckg_tool = get_code_search_tool_provider()
         args = {
             "command": command,
             "path": path,
@@ -267,7 +267,6 @@ async def git_diff(
     context: Context,
     path: str,
     base_commit: Optional[str] = None,
-    git_tool: Tool = Depends(get_git_tool_provider),
 ) -> dict[str, Any]:
     """
     Gets the git diff of a project.
@@ -281,6 +280,7 @@ async def git_diff(
     """
     logger.info(f"Executing git_diff on path '{path}'")
     try:
+        git_tool = get_git_tool_provider()
         args = {"path": path, "base_commit": base_commit}
         args = {k: v for k, v in args.items() if v is not None}
 
@@ -306,7 +306,6 @@ async def sequential_thinking(
     branch_from_thought: Optional[int] = None,
     branch_id: Optional[str] = None,
     needs_more_thoughts: Optional[bool] = None,
-    thinking_tool: Tool = Depends(get_sequential_thinking_tool_provider),
 ) -> dict[str, Any]:
     """
     A tool for dynamic and reflective problem-solving through thoughts.
@@ -327,6 +326,7 @@ async def sequential_thinking(
     """
     logger.info(f"Executing sequential_thinking step {thought_number}/{total_thoughts}")
     try:
+        thinking_tool = get_sequential_thinking_tool_provider()
         args = {
             "thought": thought,
             "next_thought_needed": next_thought_needed,
@@ -353,7 +353,6 @@ async def sequential_thinking(
 @mcp_app.tool()
 async def task_done(
     context: Context,
-    task_done_tool: Tool = Depends(get_task_done_tool_provider),
 ) -> dict[str, Any]:
     """
     Reports the completion of the task.
@@ -363,6 +362,7 @@ async def task_done(
     """
     logger.info("Executing task_done.")
     try:
+        task_done_tool = get_task_done_tool_provider()
         result = await task_done_tool.execute({})
         if result.error:
             return {"status": "error", "error": result.error, "exit_code": result.error_code}
