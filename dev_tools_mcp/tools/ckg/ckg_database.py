@@ -16,9 +16,7 @@ from dev_tools_mcp.tools.ckg.base import ClassEntry, FunctionEntry, extension_to
 from dev_tools_mcp.utils.constants import LOCAL_STORAGE_PATH
 
 CKG_DATABASE_PATH = LOCAL_STORAGE_PATH / "ckg"
-CKG_STORAGE_INFO_FILE = CKG_DATABASE_PATH / "storage_info.json"
 CKG_DATABASE_EXPIRY_TIME = 60 * 60 * 24 * 7  # 1 week in seconds
-
 
 """
 Known issues:
@@ -27,96 +25,34 @@ Known issues:
 3. For JavaScript and TypeScript, the AST is not complete: anonymous functions, arrow functions, etc., are not parsed.
 """
 
+def _get_file_content_hash(file_path: Path) -> str:
+    """Gets the MD5 hash of a file's content.
 
-def get_ckg_database_path(codebase_snapshot_hash: str) -> Path:
-    """Get the path to the CKG database for a codebase path."""
-    return CKG_DATABASE_PATH / f"{codebase_snapshot_hash}.db"
+    Args:
+        file_path: The path to the file.
 
-
-def is_git_repository(folder_path: Path) -> bool:
-    """Check if the folder is a git repository."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=folder_path,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return result.returncode == 0 and result.stdout.strip() == "true"
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
-def get_git_status_hash(folder_path: Path) -> str:
-    """Get hash for git repository (clean or dirty)."""
-    try:
-        # Check if we have any uncommitted changes
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=folder_path,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-
-        # Get the current commit hash
-        commit_result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=folder_path, capture_output=True, text=True, timeout=5
-        )
-
-        base_hash = commit_result.stdout.strip()
-
-        # If no uncommitted changes, just use the commit hash
-        if not status_result.stdout.strip():
-            return f"git-clean-{base_hash}"
-
-        # If there are uncommitted changes, include them in the hash
-        uncommitted_hash = hashlib.md5(status_result.stdout.encode()).hexdigest()[:8]
-        return f"git-dirty-{base_hash}-{uncommitted_hash}"
-
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        # Fallback to file metadata hash if git commands fail
-        return get_file_metadata_hash(folder_path)
-
-
-def get_file_metadata_hash(folder_path: Path) -> str:
-    """Get hash based on file metadata (name, mtime, size) for non-git repositories."""
+    Returns:
+        The MD5 hash as a hexadecimal string.
+    """
     hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
-    for file in folder_path.glob("**/*"):
-        if file.is_file() and not file.name.startswith("."):
-            stat = file.stat()
-            hash_md5.update(file.name.encode())
-            hash_md5.update(str(stat.st_mtime).encode())  # modification time
-            hash_md5.update(str(stat.st_size).encode())  # file size
+def _get_database_path_for_codebase(codebase_path: Path) -> Path:
+    """Generates a stable database path from the codebase path.
 
-    return f"metadata-{hash_md5.hexdigest()}"
+    This ensures that each codebase has its own unique, persistent database file.
 
+    Args:
+        codebase_path: The path to the codebase.
 
-def get_folder_snapshot_hash(folder_path: Path) -> str:
-    """Get the hash of the folder snapshot, to make sure that the CKG is up to date."""
-    # Strategy 1: Git repository
-    if is_git_repository(folder_path):
-        return get_git_status_hash(folder_path)
-
-    # Strategy 2: Non-git repository - file metadata
-    return get_file_metadata_hash(folder_path)
-
-
-def clear_older_ckg():
-    """Iterate over all the files in the CKG storage directory and delete the ones that are older than 1 week."""
-    for file in CKG_DATABASE_PATH.glob("**/*"):
-        if (
-            file.is_file()
-            and not file.name.startswith(".")
-            and file.name.endswith(".db")
-            and file.stat().st_mtime < datetime.now().timestamp() - CKG_DATABASE_EXPIRY_TIME
-        ):
-            try:
-                file.unlink()
-            except Exception as e:
-                print(f"error deleting older CKG database - {file.absolute().as_posix()}: {e}")
+    Returns:
+        The Path object for the SQLite database file.
+    """
+    codebase_hash = hashlib.md5(codebase_path.as_posix().encode()).hexdigest()
+    return CKG_DATABASE_PATH / f"ckg_{codebase_hash}.db"
 
 
 SQL_LIST = {
@@ -142,6 +78,13 @@ SQL_LIST = {
         start_line INTEGER NOT NULL,
         end_line INTEGER NOT NULL
     )""",
+    "file_hashes": """
+    CREATE TABLE IF NOT EXISTS file_hashes (
+        file_path TEXT PRIMARY KEY,
+        hash TEXT NOT NULL
+    )""",
+    "functions_filepath_index": "CREATE INDEX IF NOT EXISTS idx_functions_file_path ON functions(file_path)",
+    "classes_filepath_index": "CREATE INDEX IF NOT EXISTS idx_classes_file_path ON classes(file_path)",
 }
 
 
@@ -149,59 +92,170 @@ class CKGDatabase:
     def __init__(self, codebase_path: Path):
         self._db_connection: sqlite3.Connection
         self._codebase_path: Path = codebase_path
+        self._parsers: dict[str, Parser] = {}
 
         if not CKG_DATABASE_PATH.exists():
             CKG_DATABASE_PATH.mkdir(parents=True, exist_ok=True)
 
-        ckg_storage_info: dict[str, str] = {}
+        database_path = _get_database_path_for_codebase(codebase_path)
+        self._db_connection = sqlite3.connect(database_path)
+        self._db_connection.execute("PRAGMA journal_mode=WAL;")
+        
+        self._create_tables()
+        self.sync_codebase()
 
-        # to save time and storage, we try to reuse the existing database if the codebase snapshot hash is the same
-        # get the existing codebase snapshot hash from the storage info file
-        if CKG_STORAGE_INFO_FILE.exists():
-            with open(CKG_STORAGE_INFO_FILE, "r") as f:
-                ckg_storage_info = json.load(f)
-                if codebase_path.absolute().as_posix() in ckg_storage_info:
-                    existing_codebase_snapshot_hash = ckg_storage_info[
-                        codebase_path.absolute().as_posix()
-                    ]
-                else:
-                    existing_codebase_snapshot_hash = ""
-        else:
-            existing_codebase_snapshot_hash = ""
-
-        current_codebase_snapshot_hash = get_folder_snapshot_hash(codebase_path)
-        if existing_codebase_snapshot_hash == current_codebase_snapshot_hash:
-            # we can reuse the existing database
-            database_path = get_ckg_database_path(existing_codebase_snapshot_hash)
-        else:
-            # we need to create a new database and delete the old one
-            database_path = get_ckg_database_path(existing_codebase_snapshot_hash)
-            if database_path.exists():
-                database_path.unlink()
-            database_path = get_ckg_database_path(current_codebase_snapshot_hash)
-
-            ckg_storage_info[codebase_path.absolute().as_posix()] = current_codebase_snapshot_hash
-            with open(CKG_STORAGE_INFO_FILE, "w") as f:
-                json.dump(ckg_storage_info, f)
-
-        if database_path.exists():
-            # reuse existing database
-            self._db_connection = sqlite3.connect(database_path)
-        else:
-            # create new database with tables and build the CKG
-            self._db_connection = sqlite3.connect(database_path)
+    def _create_tables(self):
+        """Creates all necessary database tables and indices if they don't exist."""
+        with self._db_connection:
             for sql in SQL_LIST.values():
                 self._db_connection.execute(sql)
-            self._db_connection.commit()
-            self._construct_ckg()
 
     def __del__(self):
         self._db_connection.close()
 
-    def update(self):
-        """Update the CKG database."""
-        self._construct_ckg()
+    def sync_codebase(self):
+        """
+        Syncs the entire codebase against the index.
 
+        This method scans the filesystem, compares file hashes with the stored ones,
+        re-indexes any new or modified files, and removes entries for files that
+        have been deleted from the filesystem.
+        """
+        db_files = {row[0] for row in self._db_connection.execute("SELECT file_path FROM file_hashes").fetchall()}
+        disk_files = set()
+
+        for file_path in self._codebase_path.glob("**/*"):
+            if file_path.is_file() and self._should_index_file(file_path):
+                disk_files.add(file_path.absolute().as_posix())
+                
+                current_hash = _get_file_content_hash(file_path)
+                stored_hash_result = self._db_connection.execute(
+                    "SELECT hash FROM file_hashes WHERE file_path = ?", (file_path.absolute().as_posix(),)
+                ).fetchone()
+                
+                stored_hash = stored_hash_result[0] if stored_hash_result else None
+
+                if current_hash != stored_hash:
+                    print(f"Re-indexing changed file: {file_path}")
+                    self.on_file_changed(file_path)
+
+        # Remove files from index that are no longer on disk
+        for deleted_file_path_str in db_files - disk_files:
+            print(f"Removing deleted file from index: {deleted_file_path_str}")
+            self._remove_file_from_index(deleted_file_path_str)
+
+    def on_file_changed(self, file_path: Path):
+        """
+        Handles the re-indexing process for a single file that has been changed.
+
+        This is the core of the incremental update strategy. It performs the update
+        as a single atomic transaction.
+
+        Args:
+            file_path: The path to the file that has changed.
+        """
+        if not self._should_index_file(file_path):
+            return
+            
+        abs_path_str = file_path.absolute().as_posix()
+        
+        with self._db_connection:
+            # 1. Remove old entries for this file
+            self._db_connection.execute("DELETE FROM functions WHERE file_path = ?", (abs_path_str,))
+            self._db_connection.execute("DELETE FROM classes WHERE file_path = ?", (abs_path_str,))
+            
+            # 2. Index the new content
+            self._index_file(file_path)
+            
+            # 3. Update the hash
+            new_hash = _get_file_content_hash(file_path)
+            self._db_connection.execute(
+                "INSERT OR REPLACE INTO file_hashes (file_path, hash) VALUES (?, ?)",
+                (abs_path_str, new_hash)
+            )
+
+    def _remove_file_from_index(self, file_path_str: str):
+        """
+        Removes all database entries associated with a specific file.
+
+        Args:
+            file_path_str: The absolute path of the file to remove, as a string.
+        """
+        with self._db_connection:
+            self._db_connection.execute("DELETE FROM functions WHERE file_path = ?", (file_path_str,))
+            self._db_connection.execute("DELETE FROM classes WHERE file_path = ?", (file_path_str,))
+            self._db_connection.execute("DELETE FROM file_hashes WHERE file_path = ?", (file_path_str,))
+
+    def _should_index_file(self, file_path: Path) -> bool:
+        """
+        Determines if a file should be indexed based on its path and extension.
+
+        Args:
+            file_path: The path to the file.
+
+        Returns:
+            True if the file should be indexed, False otherwise.
+        """
+        # Ignore hidden files and files in hidden directories
+        if file_path.name.startswith(".") or any(part.startswith('.') for part in file_path.parts):
+            return False
+        # Ignore files with unknown extensions
+        if file_path.suffix not in extension_to_language:
+            return False
+        return True
+
+    def _get_parser(self, language: str) -> Parser:
+        """
+        Lazy-loads and retrieves a tree-sitter parser for a given language.
+
+        Args:
+            language: The name of the language (e.g., "python").
+
+        Returns:
+            A tree-sitter Parser instance for that language.
+        """
+        if language not in self._parsers:
+            parser = get_parser(language)
+            self._parsers[language] = parser
+        return self._parsers[language]
+
+    def _index_file(self, file_path: Path) -> None:
+        """
+        Parses a single file and inserts its symbols into the database.
+
+        Args:
+            file_path: The path to the file to be indexed.
+        """
+        language = extension_to_language.get(file_path.suffix)
+        if not language:
+            return
+
+        parser = self._get_parser(language)
+        try:
+            tree = parser.parse(file_path.read_bytes())
+            root_node = tree.root_node
+            abs_path_str = file_path.absolute().as_posix()
+
+            # The recursive visit methods will call _insert_entry, which commits.
+            # To make this transactional for the whole file, we wrap it.
+            with self._db_connection:
+                match language:
+                    case "python":
+                        self._recursive_visit_python(root_node, abs_path_str)
+                    case "java":
+                        self._recursive_visit_java(root_node, abs_path_str)
+                    case "cpp":
+                        self._recursive_visit_cpp(root_node, abs_path_str)
+                    case "c":
+                        self._recursive_visit_c(root_node, abs_path_str)
+                    case "typescript":
+                        self._recursive_visit_typescript(root_node, abs_path_str)
+                    case "javascript":
+                        self._recursive_visit_javascript(root_node, abs_path_str)
+        except Exception as e:
+            print(f"Failed to parse or index {file_path}: {e}")
+
+    # ... [All _recursive_visit_* methods remain the same] ...
     def _recursive_visit_python(
         self,
         root_node: Node,
@@ -531,77 +585,32 @@ class CKGDatabase:
             for child in root_node.children:
                 self._recursive_visit_javascript(child, file_path, parent_class, parent_function)
 
-    def _construct_ckg(self) -> None:
-        """Initialise the code knowledge graph."""
-
-        # lazy load the parsers for the languages when needed
-        language_to_parser: dict[str, Parser] = {}
-        for file in self._codebase_path.glob("**/*"):
-            # skip hidden files and files in a hidden directory
-            if (
-                file.is_file()
-                and not file.name.startswith(".")
-                and "/." not in file.absolute().as_posix()
-            ):
-                extension = file.suffix
-                # ignore files with unknown extensions
-                if extension not in extension_to_language:
-                    continue
-                language = extension_to_language[extension]
-
-                language_parser = language_to_parser.get(language)
-                if not language_parser:
-                    language_parser = get_parser(language)
-                    language_to_parser[language] = language_parser
-
-                tree = language_parser.parse(file.read_bytes())
-                root_node = tree.root_node
-
-                match language:
-                    case "python":
-                        self._recursive_visit_python(root_node, file.absolute().as_posix())
-                    case "java":
-                        self._recursive_visit_java(root_node, file.absolute().as_posix())
-                    case "cpp":
-                        self._recursive_visit_cpp(root_node, file.absolute().as_posix())
-                    case "c":
-                        self._recursive_visit_c(root_node, file.absolute().as_posix())
-                    case "typescript":
-                        self._recursive_visit_typescript(root_node, file.absolute().as_posix())
-                    case "javascript":
-                        self._recursive_visit_javascript(root_node, file.absolute().as_posix())
-                    case _:
-                        continue
-
     def _insert_entry(self, entry: FunctionEntry | ClassEntry) -> None:
         """
-        Insert entry into db.
+        Inserts a single code entry (function or class) into the database.
+
+        This method is designed to be called from within a larger database transaction
+        (e.g., the `with self._db_connection:` block in `_index_file`) to ensure
+        that all symbols from a single file are added atomically.
 
         Args:
-            entry: the entry to insert
-
-        Returns:
-            None
+            entry: The FunctionEntry or ClassEntry object to insert.
         """
-        # TODO: add try catch block to avoid connection problem.
+        # The self._db_connection.commit() was removed intentionally.
+        # Commits are now handled at a higher level (in on_file_changed)
+        # to ensure that all changes for a single file are atomic.
         match entry:
             case FunctionEntry():
                 self._insert_function(entry)
-
             case ClassEntry():
                 self._insert_class(entry)
 
-        self._db_connection.commit()
-
     def _insert_function(self, entry: FunctionEntry) -> None:
         """
-        Insert function entry including functions and class methodsinto db.
+        Inserts a function entry into the 'functions' table.
 
         Args:
-            entry: the entry to insert
-
-        Returns:
-            None
+            entry: The FunctionEntry to insert.
         """
         self._db_connection.execute(
             """
@@ -621,13 +630,10 @@ class CKGDatabase:
 
     def _insert_class(self, entry: ClassEntry) -> None:
         """
-        Insert class entry into db.
+        Inserts a class entry into the 'classes' table.
 
         Args:
-            entry: the entry to insert
-
-        Returns:
-            None
+            entry: The ClassEntry to insert.
         """
         self._db_connection.execute(
             """
@@ -649,18 +655,20 @@ class CKGDatabase:
         self, identifier: str, entry_type: Literal["function", "class_method"] = "function"
     ) -> list[FunctionEntry]:
         """
-        Search for a function in the database.
+        Searches for functions or methods by name in the database.
 
         Args:
-            identifier: the identifier of the function to search for
+            identifier: The name of the function or method to search for.
+            entry_type: The type of entry to search for ('function' or 'class_method').
 
         Returns:
-            a list of function entries
+            A list of matching FunctionEntry objects.
         """
-        records = self._db_connection.execute(
+        cursor = self._db_connection.execute(
             """SELECT name, file_path, body, start_line, end_line, parent_function, parent_class FROM functions WHERE name = ?""",
             (identifier,),
-        ).fetchall()
+        )
+        records = cursor.fetchall()
         function_entries: list[FunctionEntry] = []
         for record in records:
             match entry_type:
@@ -694,18 +702,19 @@ class CKGDatabase:
 
     def query_class(self, identifier: str) -> list[ClassEntry]:
         """
-        Search for a class in the database.
+        Searches for a class by name in the database.
 
         Args:
-            identifier: the identifier of the class to search for
+            identifier: The name of the class to search for.
 
         Returns:
-            a list of class entries
+            A list of matching ClassEntry objects.
         """
-        records = self._db_connection.execute(
+        cursor = self._db_connection.execute(
             """SELECT name, file_path, body, fields, methods, start_line, end_line FROM classes WHERE name = ?""",
             (identifier,),
-        ).fetchall()
+        )
+        records = cursor.fetchall()
         class_entries: list[ClassEntry] = []
         for record in records:
             class_entries.append(

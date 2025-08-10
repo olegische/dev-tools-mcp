@@ -4,27 +4,26 @@
 from pathlib import Path
 from typing import override
 
+from pathlib import Path
+from typing import override
+
 from dev_tools_mcp.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
 from dev_tools_mcp.tools.ckg.ckg_database import CKGDatabase
+from dev_tools_mcp.tools.ckg.ckg_manager import CKGManager
 from dev_tools_mcp.tools.run import MAX_RESPONSE_LEN
 
 CKGToolCommands = ["search_function", "search_class", "search_class_method"]
 
 
 class CKGTool(Tool):
-    """Tool to construct and query the code knowledge graph of a codebase."""
+    """
+    Tool to query the code knowledge graph of a codebase.
+    This tool acts as a public interface, delegating state management to a CKGManager.
+    """
 
-    def __init__(self, model_provider: str | None = None) -> None:
+    def __init__(self, ckg_manager: CKGManager, model_provider: str | None = None) -> None:
         super().__init__(model_provider)
-
-        # We store the codebase path with built CKG in the following format:
-        # {
-        #     "codebase_path": {
-        #         "db_connection": sqlite3.Connection,
-        #         "codebase_snapshot_hash": str,
-        #     }
-        # }
-        self._ckg_databases: dict[Path, CKGDatabase] = {}
+        self._ckg_manager = ckg_manager
 
     @override
     def get_model_provider(self) -> str | None:
@@ -111,10 +110,8 @@ class CKGTool(Tool):
                 error_code=-1,
             )
 
-        ckg_database = self._ckg_databases.get(codebase_path)
-        if ckg_database is None:
-            ckg_database = CKGDatabase(codebase_path)
-            self._ckg_databases[codebase_path] = ckg_database
+        # Get the correct database instance from the central manager
+        ckg_database = self._ckg_manager.get_database(codebase_path)
 
         match command:
             case "search_function":

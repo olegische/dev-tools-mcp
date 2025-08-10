@@ -232,13 +232,14 @@ async def code_search_tool(
     print_body: bool = True,
 ) -> dict[str, Any]:
     """
-    Query the code knowledge graph of a codebase.
+    Query the code knowledge graph (CKG) of a codebase for specific symbols.
+    The CKG is indexed automatically and kept in sync with the filesystem, providing reliable, up-to-date results.
 
     Args:
         command: The type of search. Can be 'search_function', 'search_class', or 'search_class_method'.
-        path: The path to the codebase.
-        identifier: The identifier of the function or class to search for.
-        print_body: Whether to print the body of the function or class. Defaults to true.
+        path: The path to the codebase to be searched.
+        identifier: The name of the function, class, or method to search for.
+        print_body: Whether to print the body of the found symbol. Defaults to true.
 
     Returns:
         A dictionary containing the search results.
@@ -262,35 +263,48 @@ async def code_search_tool(
         return {"status": "error", "error": str(e), "exit_code": 1}
 
 
-@mcp_app.tool()
-async def git_diff(
+@mcp_app.tool(name="git")
+async def git_tool(
     context: Context,
+    command: str,
     path: str,
     base_commit: Optional[str] = None,
+    message: Optional[str] = None,
+    add_path: Optional[str] = None,
 ) -> dict[str, Any]:
     """
-    Gets the git diff of a project.
+    A comprehensive tool for interacting with a Git repository.
+    This tool is self-contained and operates on the specified repository path without changing the global working directory.
 
     Args:
+        command: The git command to execute. Must be one of: 'status', 'diff', 'add', 'commit', 'restore'.
         path: The absolute path to the Git repository.
-        base_commit: The commit hash to diff against. If not provided, shows current uncommitted changes.
+        base_commit: For the 'diff' command. The commit hash to diff against. If not provided, shows current uncommitted changes.
+        message: For the 'commit' command. The commit message. This is a required argument for 'commit'.
+        add_path: For 'add' and 'restore' commands. The path of files/directories to add or restore. Defaults to '.' (all files in the repo).
 
     Returns:
-        A dictionary containing the git diff output.
+        A dictionary containing the result of the git operation.
     """
-    logger.info(f"Executing git_diff on path '{path}'")
+    logger.info(f"Executing git command '{command}' on path '{path}'")
     try:
-        git_tool = get_git_tool_provider()
-        args = {"path": path, "base_commit": base_commit}
+        tool = get_git_tool_provider()
+        args = {
+            "command": command,
+            "path": path,
+            "base_commit": base_commit,
+            "message": message,
+            "add_path": add_path,
+        }
         args = {k: v for k, v in args.items() if v is not None}
 
-        result = await git_tool.execute(args)
+        result = await tool.execute(args)
         if result.error:
             return {"status": "error", "error": result.error, "exit_code": result.error_code}
-        return {"status": "success", "diff": result.output, "exit_code": result.error_code}
+        return {"status": "success", "result": result.output, "exit_code": result.error_code}
 
     except Exception as e:
-        logger.error(f"Error executing git_diff: {e}", exc_info=True)
+        logger.error(f"Error executing git command: {e}", exc_info=True)
         return {"status": "error", "error": str(e), "exit_code": 1}
 
 

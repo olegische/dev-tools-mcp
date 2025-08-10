@@ -5,6 +5,8 @@ Configuration and dependency management for the Dev Tools MCP server.
 import logging
 from functools import lru_cache
 
+from fastapi import Depends
+
 from dev_tools_mcp.utils.config import ServiceConfig
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ from ..tools.bash_tool import BashTool
 from ..tools.edit_tool import TextEditorTool
 from ..tools.json_edit_tool import JSONEditTool
 from ..tools.ckg_tool import CKGTool
+from ..tools.ckg.ckg_manager import CKGManager
 from ..tools.git_tool import GitTool
 from ..tools.sequential_thinking_tool import SequentialThinkingTool
 from ..tools.task_done_tool import TaskDoneTool
@@ -58,11 +61,25 @@ def get_json_editor_tool_provider() -> JSONEditTool:
     return JSONEditTool()
 
 
+# CKG Related dependencies
+# The CKG Manager is a singleton that manages all CKGDatabase instances.
 @lru_cache
-def get_code_search_tool_provider() -> CKGTool:
-    """Returns a cached instance of the CKGTool."""
-    logger.info("Initializing CKGTool singleton.")
-    return CKGTool()
+def get_ckg_manager() -> CKGManager:
+    """Returns a singleton instance of the CKGManager."""
+    logger.info("Initializing CKGManager singleton.")
+    return CKGManager()
+
+
+@lru_cache
+def get_code_search_tool_provider(
+    ckg_manager: CKGManager = Depends(get_ckg_manager),
+) -> CKGTool:
+    """
+    Returns a cached instance of the CKGTool, using FastAPI's dependency
+    injection to provide the CKGManager.
+    """
+    logger.info("Initializing CKGTool singleton with CKGManager dependency.")
+    return CKGTool(ckg_manager=ckg_manager)
 
 
 @lru_cache
