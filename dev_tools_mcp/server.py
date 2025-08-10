@@ -223,44 +223,50 @@ async def json_editor(
         return {"status": "error", "error": str(e), "exit_code": 1}
 
 
-@mcp_app.tool(name="code_search")
-async def code_search_tool(
-    context: Context,
-    command: str,
-    path: str,
-    identifier: str,
-    print_body: bool = True,
-) -> dict[str, Any]:
-    """
-    Query the code knowledge graph (CKG) of a codebase for specific symbols.
-    The CKG is indexed automatically and kept in sync with the filesystem, providing reliable, up-to-date results.
+# --- CKG Tool (Feature Flagged) ---
+if server_config.FEATURE_CKG_ENABLED:
+    logger.info("CKG feature is enabled. Registering 'code_search' tool.")
 
-    Args:
-        command: The type of search. Can be 'search_function', 'search_class', or 'search_class_method'.
-        path: The path to the codebase to be searched.
-        identifier: The name of the function, class, or method to search for.
-        print_body: Whether to print the body of the found symbol. Defaults to true.
+    @mcp_app.tool(name="code_search")
+    async def code_search_tool(
+        context: Context,
+        command: str,
+        path: str,
+        identifier: str,
+        print_body: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Query the code knowledge graph (CKG) of a codebase for specific symbols.
+        The CKG is indexed automatically and kept in sync with the filesystem, providing reliable, up-to-date results.
 
-    Returns:
-        A dictionary containing the search results.
-    """
-    logger.info(f"Executing code_search command '{command}' on path '{path}'")
-    try:
-        ckg_tool = get_code_search_tool_provider()
-        args = {
-            "command": command,
-            "path": path,
-            "identifier": identifier,
-            "print_body": print_body,
-        }
-        result = await ckg_tool.execute(args)
-        if result.error:
-            return {"status": "error", "error": result.error, "exit_code": result.error_code}
-        return {"status": "success", "result": result.output, "exit_code": result.error_code}
+        Args:
+            command: The type of search. Can be 'search_function', 'search_class', or 'search_class_method'.
+            path: The path to the codebase to be searched.
+            identifier: The name of the function, class, or method to search for.
+            print_body: Whether to print the body of the found symbol. Defaults to true.
 
-    except Exception as e:
-        logger.error(f"Error executing code_search command: {e}", exc_info=True)
-        return {"status": "error", "error": str(e), "exit_code": 1}
+        Returns:
+            A dictionary containing the search results.
+        """
+        logger.info(f"Executing code_search command '{command}' on path '{path}'")
+        try:
+            ckg_tool = get_code_search_tool_provider()
+            args = {
+                "command": command,
+                "path": path,
+                "identifier": identifier,
+                "print_body": print_body,
+            }
+            result = await ckg_tool.execute(args)
+            if result.error:
+                return {"status": "error", "error": result.error, "exit_code": result.error_code}
+            return {"status": "success", "result": result.output, "exit_code": result.error_code}
+
+        except Exception as e:
+            logger.error(f"Error executing code_search command: {e}", exc_info=True)
+            return {"status": "error", "error": str(e), "exit_code": 1}
+else:
+    logger.warning("CKG feature is disabled. The 'code_search' tool will not be available.")
 
 
 @mcp_app.tool(name="git")

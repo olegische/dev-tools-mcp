@@ -16,6 +16,10 @@ class ServiceConfig(BaseSettings):
     # Port for the MCP server to listen on.
     MCP_PORT: int = 8660
 
+    # --- Feature Flags ---
+    # Enables the Code Knowledge Graph (CKG) tool for code searching.
+    FEATURE_CKG_ENABLED: bool = False
+
     class Config:
         """Pydantic configuration settings."""
 
