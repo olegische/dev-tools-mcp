@@ -37,7 +37,6 @@ from ..tools.ckg_tool import CKGTool
 from ..tools.ckg.ckg_manager import CKGManager
 from ..tools.git_tool import GitTool
 from ..tools.sequential_thinking_tool import SequentialThinkingTool
-from ..tools.task_done_tool import TaskDoneTool
 
 
 @lru_cache
@@ -94,10 +93,3 @@ def get_sequential_thinking_tool_provider() -> SequentialThinkingTool:
     """Returns a cached instance of the SequentialThinkingTool."""
     logger.info("Initializing SequentialThinkingTool singleton.")
     return SequentialThinkingTool()
-
-
-@lru_cache
-def get_task_done_tool_provider() -> TaskDoneTool:
-    """Returns a cached instance of the TaskDoneTool."""
-    logger.info("Initializing TaskDoneTool singleton.")
-    return TaskDoneTool()

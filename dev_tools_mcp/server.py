@@ -23,7 +23,6 @@ from dev_tools_mcp.utils.dependencies import (
     get_code_search_tool_provider,
     get_git_tool_provider,
     get_sequential_thinking_tool_provider,
-    get_task_done_tool_provider,
 )
 
 
@@ -367,27 +366,4 @@ async def sequential_thinking(
 
     except Exception as e:
         logger.error(f"Error executing sequential_thinking: {e}", exc_info=True)
-        return {"status": "error", "error": str(e), "exit_code": 1}
-
-
-@mcp_app.tool()
-async def task_done(
-    context: Context,
-) -> dict[str, Any]:
-    """
-    Reports the completion of the task.
-
-    Returns:
-        A dictionary with a confirmation message.
-    """
-    logger.info("Executing task_done.")
-    try:
-        task_done_tool = get_task_done_tool_provider()
-        result = await task_done_tool.execute({})
-        if result.error:
-            return {"status": "error", "error": result.error, "exit_code": result.error_code}
-        return {"status": "success", "result": result.output, "exit_code": result.error_code}
-
-    except Exception as e:
-        logger.error(f"Error executing task_done: {e}", exc_info=True)
         return {"status": "error", "error": str(e), "exit_code": 1}
