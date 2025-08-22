@@ -11,7 +11,9 @@ from jsonpath_ng import Fields, Index
 from jsonpath_ng import parse as jsonpath_parse
 from jsonpath_ng.exceptions import JSONPathError
 
+from dev_tools_mcp.models.session import FileSystemState
 from dev_tools_mcp.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
+from dev_tools_mcp.utils.path_utils import resolve_path
 
 
 class JSONEditTool(Tool):
@@ -66,7 +68,7 @@ JSONPath syntax supported:
             ToolParameter(
                 name="file_path",
                 type="string",
-                description="The full, ABSOLUTE path to the JSON file to edit. You MUST combine the [Project root path] with the file's relative path to construct this. Relative paths are NOT allowed.",
+                description="Path to the JSON file, relative to the CWD.",
                 required=True,
             ),
             ToolParameter(
@@ -92,6 +94,10 @@ JSONPath syntax supported:
     @override
     async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
         """Execute the JSON edit operation."""
+        state = arguments.get("_fs_state")
+        if not isinstance(state, FileSystemState):
+            return ToolExecResult(error="FileSystemState not found in arguments.", error_code=-1)
+
         try:
             operation = str(arguments.get("operation", "")).lower()
             if not operation:
@@ -101,11 +107,7 @@ JSONPath syntax supported:
             if not file_path_str:
                 return ToolExecResult(error="file_path parameter is required", error_code=-1)
 
-            file_path = Path(file_path_str)
-            if not file_path.is_absolute():
-                return ToolExecResult(
-                    error=f"File path must be absolute: {file_path}", error_code=-1
-                )
+            resolved_path = resolve_path(state, file_path_str, must_be_relative=True)
 
             json_path_arg = arguments.get("json_path")
             if json_path_arg is not None and not isinstance(json_path_arg, str):
@@ -120,7 +122,7 @@ JSONPath syntax supported:
                 )
 
             if operation == "view":
-                return await self._view_json(file_path, json_path_arg, pretty_print_arg)
+                return await self._view_json(resolved_path, json_path_arg, pretty_print_arg)
 
             if not isinstance(json_path_arg, str):
                 return ToolExecResult(
@@ -136,15 +138,15 @@ JSONPath syntax supported:
                     )
                 if operation == "set":
                     return await self._set_json_value(
-                        file_path, json_path_arg, value, pretty_print_arg
+                        resolved_path, json_path_arg, value, pretty_print_arg
                     )
                 else:  # operation == "add"
                     return await self._add_json_value(
-                        file_path, json_path_arg, value, pretty_print_arg
+                        resolved_path, json_path_arg, value, pretty_print_arg
                     )
 
             if operation == "remove":
-                return await self._remove_json_value(file_path, json_path_arg, pretty_print_arg)
+                return await self._remove_json_value(resolved_path, json_path_arg, pretty_print_arg)
 
             return ToolExecResult(
                 error=f"Unknown operation: {operation}. Supported operations: view, set, add, remove",

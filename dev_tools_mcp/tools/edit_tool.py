@@ -12,8 +12,10 @@
 from pathlib import Path
 from typing import override
 
+from dev_tools_mcp.models.session import FileSystemState
 from dev_tools_mcp.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
 from dev_tools_mcp.tools.run import maybe_truncate, run
+from dev_tools_mcp.utils.path_utils import resolve_path
 
 EditToolSubCommands = [
     "view",
@@ -86,7 +88,7 @@ Notes for using the `str_replace` command:
             ToolParameter(
                 name="path",
                 type="string",
-                description="Absolute path to file or directory, e.g. `/repo/file.py` or `/repo`.",
+                description="Path to file or directory, relative to the CWD. e.g. 'src/main.py'.",
                 required=True,
             ),
             ToolParameter(
@@ -100,56 +102,39 @@ Notes for using the `str_replace` command:
     @override
     async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
         """Execute the str_replace_editor tool."""
-        command = str(arguments["command"]) if "command" in arguments else None
-        if command is None:
-            return ToolExecResult(
-                error=f"No command provided for the {self.get_name()} tool",
-                error_code=-1,
-            )
-        path = str(arguments["path"]) if "path" in arguments else None
-        if path is None:
-            return ToolExecResult(
-                error=f"No path provided for the {self.get_name()} tool", error_code=-1
-            )
-        _path = Path(path)
+        state = arguments.get("_fs_state")
+        if not isinstance(state, FileSystemState):
+            return ToolExecResult(error="FileSystemState not found in arguments.", error_code=-1)
+
+        command = str(arguments.get("command"))
+        path_str = str(arguments.get("path"))
+
         try:
-            self.validate_path(command, _path)
+            resolved_path = resolve_path(state, path_str, must_be_relative=True)
+
+            if not resolved_path.exists() and command != "create":
+                raise ToolError(f"The path {resolved_path} does not exist.")
+            if resolved_path.exists() and command == "create":
+                raise ToolError(f"File already exists at: {resolved_path}.")
+            if resolved_path.is_dir() and command != "view":
+                raise ToolError(f"The path {resolved_path} is a directory and only the `view` command can be used on directories.")
+
             match command:
                 case "view":
-                    return await self._view_handler(arguments, _path)
+                    return await self._view_handler(arguments, resolved_path)
                 case "create":
-                    return self._create_handler(arguments, _path)
+                    return self._create_handler(arguments, resolved_path)
                 case "str_replace":
-                    return self._str_replace_handler(arguments, _path)
+                    return self._str_replace_handler(arguments, resolved_path)
                 case "insert":
-                    return self._insert_handler(arguments, _path)
+                    return self._insert_handler(arguments, resolved_path)
                 case _:
                     return ToolExecResult(
-                        error=f"Unrecognized command {command}. The allowed commands for the {self.name} tool are: {', '.join(EditToolSubCommands)}",
+                        error=f"Unrecognized command {command}. The allowed commands for the {self.get_name()} tool are: {', '.join(EditToolSubCommands)}",
                         error_code=-1,
                     )
-        except ToolError as e:
+        except (ToolError, ValueError, PermissionError, FileNotFoundError) as e:
             return ToolExecResult(error=str(e), error_code=-1)
-
-    def validate_path(self, command: str, path: Path):
-        """Validate the path for the str_replace_editor tool."""
-        if not path.is_absolute():
-            suggested_path = Path("/") / path
-            raise ToolError(
-                f"The path {path} is not an absolute path, it should start with `/`. Maybe you meant {suggested_path}?"
-            )
-        # Check if path exists
-        if not path.exists() and command != "create":
-            raise ToolError(f"The path {path} does not exist. Please provide a valid path.")
-        if path.exists() and command == "create":
-            raise ToolError(
-                f"File already exists at: {path}. Cannot overwrite files using command `create`."
-            )
-        # Check if the path points to a directory
-        if path.is_dir() and command != "view":
-            raise ToolError(
-                f"The path {path} is a directory and only the `view` command can be used on directories"
-            )
 
     async def _view(self, path: Path, view_range: list[int] | None = None) -> ToolExecResult:
         """Implement the view command"""

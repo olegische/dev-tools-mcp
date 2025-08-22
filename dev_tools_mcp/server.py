@@ -12,18 +12,21 @@ from starlette.middleware import Middleware
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from dev_tools_mcp.prompts import get_prompts
-from dev_tools_mcp.tools.base import Tool
+from dev_tools_mcp.prompts import get_all_prompts
+from dev_tools_mcp.tools.base import Tool, ToolError
 from dev_tools_mcp.utils.config import ServiceConfig
 from dev_tools_mcp.utils.dependencies import (
     get_base_config,
     get_bash_tool_provider,
-    get_file_editor_tool_provider,
-    get_json_editor_tool_provider,
     get_code_search_tool_provider,
+    get_file_editor_tool_provider,
+    get_file_system_tool_provider,
     get_git_tool_provider,
+    get_json_editor_tool_provider,
+    get_session_manager,
     get_sequential_thinking_tool_provider,
 )
+from dev_tools_mcp.utils.session_manager import SessionManager
 
 
 # Get a module-level logger
@@ -85,13 +88,63 @@ mcp_app = build_server(server_config)
 
 
 # --- Prompt Handlers ---
-@mcp_app.prompt(title="Agent System Prompt for Dev Tools")
-def get_system_prompt() -> str:
-    """Provides the main system prompt for the agent."""
-    prompts = get_prompts()
-    return prompts["agent-system-prompt"]
+@mcp_app.prompt(title="Dynamic Agent System Prompt")
+def get_system_prompt(context: Context) -> str:
+    """
+    Provides a system prompt that dynamically changes based on the session's phase.
+    """
+    session_manager = get_session_manager()
+    session_id = context.request_context.request.query_params.get("session_id") or "default"
+    state = session_manager.get_fs_state(session_id)
+    prompts = get_all_prompts()
+
+    base_prompt = prompts["base"]
+    
+    if state.phase == "discovery":
+        phase_instructions = prompts["discovery-instructions"]
+    else:  # phase == "edit"
+        phase_instructions = prompts["edit-instructions"]
+
+    return f"{base_prompt}\n{phase_instructions}"
 
 # --- Tool Definitions ---
+
+@mcp_app.tool(name="file_system")
+async def file_system_tool(
+    context: Context,
+    subcommand: str,
+    path: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Tool for exploring the file system and managing the session state.
+    This is the primary tool for the 'discovery' phase of the workflow.
+
+    Args:
+        subcommand: The operation to perform. Can be 'pwd', 'ls', 'cd', 'read', 'lock_cwd', or 'unlock_cwd'.
+        path: The path for 'ls', 'cd', or 'read'. Can be relative or absolute.
+
+    Returns:
+        A dictionary containing the result of the operation.
+    """
+    logger.info(f"Executing file_system command '{subcommand}'")
+    try:
+        session_manager = get_session_manager()
+        session_id = context.request_context.request.query_params.get("session_id") or "default"
+        state = session_manager.get_fs_state(session_id)
+
+        tool = get_file_system_tool_provider()
+        args = {"subcommand": subcommand, "path": path, "_fs_state": state}
+        args = {k: v for k, v in args.items() if v is not None}
+
+        result = await tool.execute(args)
+        if result.error:
+            return {"status": "error", "error": result.error, "exit_code": result.error_code}
+        return {"status": "success", "result": result.output, "exit_code": result.error_code}
+
+    except Exception as e:
+        logger.error(f"Error executing file_system command: {e}", exc_info=True)
+        return {"status": "error", "error": str(e), "exit_code": 1}
+
 
 @mcp_app.tool()
 async def bash(
@@ -111,9 +164,14 @@ async def bash(
     """
     logger.info(f"Executing bash command: {command}")
     try:
+        session_manager = get_session_manager()
+        session_id = context.request_context.request.query_params.get("session_id") or "default"
+        state = session_manager.get_fs_state(session_id)
+        if state.phase != "edit":
+            raise ToolError("Cannot use the bash tool in 'discovery' phase. Use file_system.lock_cwd() first.")
+
         bash_tool = get_bash_tool_provider()
-        # The `execute` method of the tool expects a single dictionary of arguments.
-        args = {"command": command, "restart": restart}
+        args = {"command": command, "restart": restart, "_fs_state": state}
         result = await bash_tool.execute(args)
         return {
             "stdout": result.output,
@@ -142,7 +200,7 @@ async def file_editor_tool(
 
     Args:
         command: The type of operation. Can be 'view', 'create', 'str_replace', or 'insert'.
-        path: The absolute path to the file or directory.
+        path: The path to the file or directory, relative to the current working directory (CWD).
         file_text: The content for a 'create' operation.
         old_str: The string to search for in a 'str_replace' operation. Must be unique.
         new_str: The replacement string for 'str_replace' or the content for 'insert'.
@@ -154,6 +212,12 @@ async def file_editor_tool(
     """
     logger.info(f"Executing file_editor command '{command}' on path '{path}'")
     try:
+        session_manager = get_session_manager()
+        session_id = context.request_context.request.query_params.get("session_id") or "default"
+        state = session_manager.get_fs_state(session_id)
+        if state.phase != "edit":
+            raise ToolError("Cannot use the file_editor tool in 'discovery' phase. Use file_system.lock_cwd() first.")
+
         editor_tool = get_file_editor_tool_provider()
         args = {
             "command": command,
@@ -163,6 +227,7 @@ async def file_editor_tool(
             "new_str": new_str,
             "insert_line": insert_line,
             "view_range": view_range,
+            "_fs_state": state,
         }
         # Filter out None values so we don't pass them to the tool
         args = {k: v for k, v in args.items() if v is not None}
@@ -191,7 +256,7 @@ async def json_editor(
 
     Args:
         operation: The operation to perform. Can be 'view', 'set', 'add', or 'remove'.
-        file_path: The absolute path to the JSON file.
+        file_path: The path to the JSON file, relative to the current working directory (CWD).
         json_path: JSONPath expression to specify the target location.
         value: The JSON-serializable value to set or add.
         pretty_print: Whether to format the JSON output with indentation.
@@ -201,6 +266,12 @@ async def json_editor(
     """
     logger.info(f"Executing json_editor operation '{operation}' on file '{file_path}'")
     try:
+        session_manager = get_session_manager()
+        session_id = context.request_context.request.query_params.get("session_id") or "default"
+        state = session_manager.get_fs_state(session_id)
+        if state.phase != "edit":
+            raise ToolError("Cannot use the json_editor tool in 'discovery' phase. Use file_system.lock_cwd() first.")
+
         json_editor_tool = get_json_editor_tool_provider()
         args = {
             "operation": operation,
@@ -208,6 +279,7 @@ async def json_editor(
             "json_path": json_path,
             "value": value,
             "pretty_print": pretty_print,
+            "_fs_state": state,
         }
         # Filter out None values for optional tool arguments
         args = {k: v for k, v in args.items() if v is not None}
@@ -276,6 +348,7 @@ async def git_tool(
     base_commit: Optional[str] = None,
     message: Optional[str] = None,
     add_path: Optional[str] = None,
+    file_path: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     A comprehensive tool for interacting with a Git repository.
@@ -283,16 +356,23 @@ async def git_tool(
 
     Args:
         command: The git command to execute. Must be one of: 'status', 'diff', 'add', 'commit', 'restore'.
-        path: The absolute path to the Git repository.
+        path: The path to the Git repository root, relative to the current working directory (CWD). e.g., '.'.
         base_commit: For the 'diff' command. The commit hash to diff against. If not provided, shows current uncommitted changes.
         message: For the 'commit' command. The commit message. This is a required argument for 'commit'.
         add_path: For 'add' and 'restore' commands. The path of files/directories to add or restore. Defaults to '.' (all files in the repo).
+        file_path: For the 'diff' command. The path to a specific file to see the diff for.
 
     Returns:
         A dictionary containing the result of the git operation.
     """
     logger.info(f"Executing git command '{command}' on path '{path}'")
     try:
+        session_manager = get_session_manager()
+        session_id = context.request_context.request.query_params.get("session_id") or "default"
+        state = session_manager.get_fs_state(session_id)
+        if state.phase != "edit":
+            raise ToolError("Cannot use the git tool in 'discovery' phase. Use file_system.lock_cwd() first.")
+
         tool = get_git_tool_provider()
         args = {
             "command": command,
@@ -300,6 +380,8 @@ async def git_tool(
             "base_commit": base_commit,
             "message": message,
             "add_path": add_path,
+            "file_path": file_path,
+            "_fs_state": state,
         }
         args = {k: v for k, v in args.items() if v is not None}
 

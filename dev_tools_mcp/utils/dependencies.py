@@ -35,8 +35,24 @@ from ..tools.edit_tool import TextEditorTool
 from ..tools.json_edit_tool import JSONEditTool
 from ..tools.ckg_tool import CKGTool
 from ..tools.ckg.ckg_manager import CKGManager
+from ..tools.file_system_tool import FileSystemTool
 from ..tools.git_tool import GitTool
 from ..tools.sequential_thinking_tool import SequentialThinkingTool
+from .session_manager import SessionManager
+
+
+@lru_cache
+def get_session_manager() -> SessionManager:
+    """Returns a singleton instance of the SessionManager."""
+    logger.info("Initializing SessionManager singleton.")
+    return SessionManager()
+
+
+@lru_cache
+def get_file_system_tool_provider() -> FileSystemTool:
+    """Returns a cached instance of the FileSystemTool."""
+    logger.info("Initializing FileSystemTool singleton.")
+    return FileSystemTool()
 
 
 @lru_cache
