@@ -98,14 +98,10 @@ class _BashSession:
         command_sep = "&" if os.name == "nt" else ";"
 
         # send command to the process
-        # We use `{ ...; }` to group commands to run them in the current shell context,
-        # preserving the state (like CWD). Using `(...)` would create a subshell,
-        # discarding any state changes after the command completes.
-        # A space after `{` and a semicolon before `}` are required by bash syntax.
         self._process.stdin.write(
-            b"{ \n"
+            b"(\n"
             + command.encode()
-            + f"\n;}}{command_sep} echo {self._sentinel.replace('__ERROR_CODE__', errcode_retriever)}\n".encode()
+            + f"\n){command_sep} echo {self._sentinel.replace('__ERROR_CODE__', errcode_retriever)}\n".encode()
         )
         await self._process.stdin.drain()
 
