@@ -36,6 +36,7 @@ from ..tools.json_edit_tool import JSONEditTool
 from ..tools.ckg_tool import CKGTool
 from ..tools.ckg.ckg_manager import CKGManager
 from ..tools.file_system_tool import FileSystemTool
+from ..tools.directory_explorer_tool import DirectoryExplorerTool
 from ..tools.git_tool import GitTool
 from ..tools.sequential_thinking_tool import SequentialThinkingTool
 from .session_manager import SessionManager
@@ -53,6 +54,13 @@ def get_file_system_tool_provider() -> FileSystemTool:
     """Returns a cached instance of the FileSystemTool."""
     logger.info("Initializing FileSystemTool singleton.")
     return FileSystemTool()
+
+
+@lru_cache
+def get_directory_explorer_tool_provider() -> DirectoryExplorerTool:
+    """Returns a cached instance of the DirectoryExplorerTool."""
+    logger.info("Initializing DirectoryExplorerTool singleton.")
+    return DirectoryExplorerTool()
 
 
 @lru_cache

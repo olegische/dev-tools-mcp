@@ -21,6 +21,7 @@ from dev_tools_mcp.utils.dependencies import (
     get_code_search_tool_provider,
     get_file_editor_tool_provider,
     get_file_system_tool_provider,
+    get_directory_explorer_tool_provider,
     get_git_tool_provider,
     get_json_editor_tool_provider,
     get_session_manager,
@@ -143,6 +144,60 @@ async def file_system_tool(
 
     except Exception as e:
         logger.error(f"Error executing file_system command: {e}", exc_info=True)
+        return {"status": "error", "error": str(e), "exit_code": 1}
+
+
+@mcp_app.tool(name="directory_explorer")
+async def directory_explorer_tool(
+    context: Context,
+    subcommand: str,
+    path: Optional[str] = None,
+    recursive: Optional[bool] = None,
+    limit: Optional[int] = None,
+    query: Optional[str] = None,
+    file_pattern: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Advanced tool for exploring directory structures with detailed information.
+    Provides comprehensive directory analysis including file listing, tree visualization,
+    and content searching.
+
+    Args:
+        subcommand: The operation to perform. Can be 'list', 'tree', or 'search'.
+        path: The path for the operation. Can be relative or absolute. Defaults to current directory.
+        recursive: Whether to traverse directories recursively (for list and tree commands).
+        limit: Maximum number of files to return (for list and tree commands). Default: 100.
+        query: Search query for the 'search' command.
+        file_pattern: File pattern to search in (e.g., '*.py', '*.js'). Default: all files.
+
+    Returns:
+        A dictionary containing the result of the operation.
+    """
+    logger.info(f"Executing directory_explorer command '{subcommand}'")
+    try:
+        session_manager = get_session_manager()
+        session_id = context.request_context.request.query_params.get("session_id") or "default"
+        state = session_manager.get_fs_state(session_id)
+
+        tool = get_directory_explorer_tool_provider()
+        args = {
+            "subcommand": subcommand,
+            "path": path,
+            "recursive": recursive,
+            "limit": limit,
+            "query": query,
+            "file_pattern": file_pattern,
+            "_fs_state": state,
+        }
+        args = {k: v for k, v in args.items() if v is not None}
+
+        result = await tool.execute(args)
+        if result.error:
+            return {"status": "error", "error": result.error, "exit_code": result.error_code}
+        return {"status": "success", "result": result.output, "exit_code": result.error_code}
+
+    except Exception as e:
+        logger.error(f"Error executing directory_explorer command: {e}", exc_info=True)
         return {"status": "error", "error": str(e), "exit_code": 1}
 
 
