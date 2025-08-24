@@ -89,24 +89,7 @@ mcp_app = build_server(server_config)
 
 
 # --- Prompt Handlers ---
-@mcp_app.prompt(title="Dynamic Agent System Prompt")
-def get_system_prompt(context: Context) -> str:
-    """
-    Provides a system prompt that dynamically changes based on the session's phase.
-    """
-    session_manager = get_session_manager()
-    session_id = context.request_context.request.query_params.get("session_id") or "default"
-    state = session_manager.get_fs_state(session_id)
-    prompts = get_all_prompts()
-
-    base_prompt = prompts["base"]
-    
-    if state.phase == "discovery":
-        phase_instructions = prompts["discovery-instructions"]
-    else:  # phase == "edit"
-        phase_instructions = prompts["edit-instructions"]
-
-    return f"{base_prompt}\n{phase_instructions}"
+# FastMCP prompts must be static strings, not functions
 
 # --- Tool Definitions ---
 
@@ -504,3 +487,44 @@ async def sequential_thinking(
     except Exception as e:
         logger.error(f"Error executing sequential_thinking: {e}", exc_info=True)
         return {"status": "error", "error": str(e), "exit_code": 1}
+
+# --- Static Prompts for FastMCP ---
+# These are static prompts that FastMCP can use without requiring arguments
+@mcp_app.prompt(title="Dynamic System Prompt")
+def dynamic_system_prompt() -> str:
+    """
+    Returns the complete system prompt that combines base prompt with phase-specific instructions.
+    This is a static prompt that FastMCP can use.
+    """
+    prompts = get_all_prompts()
+    base_prompt = prompts["base"]
+    # Default to discovery phase instructions for the static prompt
+    phase_instructions = prompts["discovery-instructions"]
+    return f"{base_prompt}\n{phase_instructions}"
+
+@mcp_app.prompt(title="Base System Prompt")
+def base_system_prompt() -> str:
+    """
+    Returns the base system prompt for the AI agent.
+    This is a static prompt that FastMCP can use.
+    """
+    prompts = get_all_prompts()
+    return prompts["base"]
+
+@mcp_app.prompt(title="Discovery Phase Instructions")
+def discovery_prompt() -> str:
+    """
+    Returns the discovery phase instructions.
+    This is a static prompt that FastMCP can use.
+    """
+    prompts = get_all_prompts()
+    return prompts["discovery-instructions"]
+
+@mcp_app.prompt(title="Edit Phase Instructions")
+def edit_prompt() -> str:
+    """
+    Returns the edit phase instructions.
+    This is a static prompt that FastMCP can use.
+    """
+    prompts = get_all_prompts()
+    return prompts["edit-instructions"]
