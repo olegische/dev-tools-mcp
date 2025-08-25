@@ -1,99 +1,142 @@
 import pathlib
+import json
 from typing import Dict, List
 
 
 def format_file_list(files: List[Dict]) -> str:
-    """Format file list for output - без эмодзи."""
+    """
+    Format file list as structured JSON for LLM consumption.
+    
+    Returns a JSON string with clear structure that LLMs can easily parse
+    and understand, instead of hard-to-parse plain text.
+    """
     if not files:
-        return "No files found."
+        return "{\n  \"status\": \"empty\",\n  \"message\": \"No files found\",\n  \"files\": []\n}"
     
-    lines = []
+    # Create structured output
+    file_list = []
     for file_info in files:
-        prefix = "DIR " if file_info["is_dir"] else "FILE"
-        line = f"{prefix:<4} {file_info['name']:<30} {file_info['size']:>10} {file_info['modified']} {file_info['permissions']}"
-        lines.append(line)
+        file_entry = {
+            "name": file_info["name"],
+            "type": "directory" if file_info["is_dir"] else "file",
+            "size": file_info["size"],
+            "modified": file_info["modified"],
+            "permissions": file_info["permissions"],
+            "path": file_info["path"]
+        }
+        file_list.append(file_entry)
     
-    return "\n".join(lines)
+    # Return structured JSON
+    return json.dumps({
+        "status": "success",
+        "count": len(file_list),
+        "files": file_list
+    }, indent=2)
 
 
 def format_tree(tree_data: List[Dict], root_name: str) -> str:
-    """Format tree structure for output - без эмодзи."""
+    """
+    Format tree structure as structured JSON for LLM consumption.
+    
+    Returns a JSON string with hierarchical structure that LLMs can easily
+    parse and understand, instead of hard-to-parse plain text.
+    """
     if not tree_data:
-        return f"{root_name}\n└── (empty)"
+        return json.dumps({
+            "status": "empty",
+            "root": root_name,
+            "message": "Directory is empty",
+            "tree": []
+        }, indent=2)
     
-    lines = [root_name]
-    
+    # Create structured tree output
+    tree_items = []
     for item in tree_data:
-        indent = "  " * item["depth"]
-        prefix = "└── " if item == tree_data[-1] else "├── "
-        item_type = "DIR " if item["is_dir"] else "FILE"
-        
-        lines.append(f"{indent}{prefix}{item_type} {item['name']}")
+        tree_entry = {
+            "name": item["name"],
+            "type": "directory" if item["is_dir"] else "file",
+            "depth": item["depth"],
+            "path": item["path"]
+        }
+        tree_items.append(tree_entry)
     
-    return "\n".join(lines)
+    # Return structured JSON
+    return json.dumps({
+        "status": "success",
+        "root": root_name,
+        "count": len(tree_items),
+        "tree": tree_items
+    }, indent=2)
 
 
 
 
 
 def format_search_results(results: List, cwd: str, max_results: int, max_ripgrep_mb: float, max_byte_size: int) -> str:
-    """Format search results with size limits - твой код."""
+    """
+    Format search results as structured JSON for LLM consumption.
+    
+    Returns a JSON string with organized search results that LLMs can easily
+    parse and understand, instead of hard-to-parse plain text.
+    """
+    if not results:
+        return json.dumps({
+            "status": "empty",
+            "message": "No search results found",
+            "results": []
+        }, indent=2)
+    
+    # Group results by file
     grouped = {}
-    output = ""
-
-    if len(results) >= max_results:
-        output += f"Showing first {max_results} of {max_results}+ results. Use a more specific search.\n\n"
-    else:
-        output += f"Found {len(results)} result(s).\n\n"
-
     for r in results:
         rel_path = pathlib.Path(r.file_path).relative_to(cwd)
         grouped.setdefault(str(rel_path), []).append(r)
-
-    byte_size = len(output.encode("utf-8"))
-    was_limit = False
-
+    
+    # Check if we hit limits
+    was_limit = len(results) >= max_results
+    byte_size = 0
+    formatted_results = []
+    
     for file_path, file_results in grouped.items():
-        file_block = f"{pathlib.PurePosixPath(file_path)}\n|----\n"
-        if byte_size + len(file_block.encode("utf-8")) >= max_byte_size:
-            was_limit = True
+        if len(formatted_results) >= max_results:
             break
-
-        output += file_block
-        byte_size += len(file_block.encode("utf-8"))
-
-        for idx, r in enumerate(file_results):
-            all_lines = [*r.before_context, r.match, *r.after_context]
-            block = "".join(f"|{line.rstrip()}\n" for line in all_lines)
-
-            if byte_size + len(block.encode("utf-8")) >= max_byte_size:
+            
+        file_result = {
+            "file": file_path,
+            "matches": []
+        }
+        
+        for r in file_results:
+            if len(file_result["matches"]) >= max_results:
+                break
+                
+            match = {
+                "line": r.match.strip(),
+                "line_number": getattr(r, 'line_number', '?'),
+                "context": {
+                    "before": [line.strip() for line in r.before_context],
+                    "after": [line.strip() for line in r.after_context]
+                }
+            }
+            file_result["matches"].append(match)
+            
+            # Check byte size limit
+            match_bytes = len(json.dumps(match).encode("utf-8"))
+            if byte_size + match_bytes >= max_byte_size:
                 was_limit = True
                 break
-
-            output += block
-            byte_size += len(block.encode("utf-8"))
-
-            if idx < len(file_results) - 1:
-                sep = "|----\n"
-                if byte_size + len(sep.encode("utf-8")) >= max_byte_size:
-                    was_limit = True
-                    break
-                output += sep
-                byte_size += len(sep.encode("utf-8"))
-
+            byte_size += match_bytes
+        
+        formatted_results.append(file_result)
+        
         if was_limit:
             break
-
-        closing = "|----\n\n"
-        if byte_size + len(closing.encode("utf-8")) >= max_byte_size:
-            was_limit = True
-            break
-        output += closing
-        byte_size += len(closing.encode("utf-8"))
-
-    if was_limit:
-        trunc_msg = f"\n[Results truncated due to exceeding {max_ripgrep_mb}MB limit.]"
-        if byte_size + len(trunc_msg.encode("utf-8")) < max_byte_size:
-            output += trunc_msg
-
-    return output.strip()
+    
+    # Return structured JSON
+    return json.dumps({
+        "status": "success",
+        "total_results": len(results),
+        "showing_results": len(formatted_results),
+        "was_truncated": was_limit,
+        "results": formatted_results
+    }, indent=2)

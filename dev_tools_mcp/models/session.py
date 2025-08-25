@@ -10,6 +10,7 @@ class FileSystemState(BaseModel):
     root: Path = Field(default=Path("/"))
     cwd: Path | None = None
     phase: Literal["discovery", "edit"] = "discovery"
+    git_root: Path | None = None  # Path to git repository root
 
     def model_post_init(self, __context) -> None:
         if self.cwd is None:

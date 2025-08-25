@@ -7,15 +7,16 @@ from dev_tools_mcp.utils.path_utils import resolve_path
 
 from .base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
 
-FileSystemToolSubCommands = ["cd", "pwd", "ls", "read", "lock_cwd", "unlock_cwd"]
+FileSystemToolSubCommands = ["cd", "pwd", "ls", "lock_cwd", "unlock_cwd"]
 
 
 class FileSystemTool(Tool):
     """
     Tool for exploring the file system and managing the session state.
     This is the primary tool for the 'discovery' phase of the workflow.
-    It allows for read-only operations to navigate directories and view files.
+    It allows for read-only operations to navigate directories.
     It also provides the `lock_cwd` command to transition to the 'edit' phase.
+    For viewing files, use file_editor.view which works in both phases.
     """
 
     def __init__(self, model_provider: str | None = None) -> None:
@@ -32,7 +33,8 @@ class FileSystemTool(Tool):
     @override
     def get_description(self) -> str:
         return """A tool for exploring the file system and managing the session state.
-In 'discovery' phase, it provides read-only commands to navigate (`cd`, `ls`, `pwd`) and inspect files (`read`).
+In 'discovery' phase, it provides read-only commands to navigate (`cd`, `ls`, `pwd`).
+For viewing files, use file_editor.view which works in both phases.
 Use the `lock_cwd` command to finalize the current working directory and switch to the 'edit' phase, which enables all other tools.
 Use the `unlock_cwd` command to switch back to the 'discovery' phase from the 'edit' phase."""
 
@@ -75,8 +77,7 @@ Use the `unlock_cwd` command to switch back to the 'discovery' phase from the 'e
                     return self._cd_handler(state, arguments)
                 case "ls":
                     return self._ls_handler(state, arguments)
-                case "read":
-                    return self._read_handler(state, arguments)
+                # case "read": - REMOVED: use file_editor.view instead
                 case "lock_cwd":
                     return self._lock_cwd_handler(state)
                 case "unlock_cwd":
@@ -117,25 +118,34 @@ Use the `unlock_cwd` command to switch back to the 'discovery' phase from the 'e
         
         return ToolExecResult(output="\n".join(entries))
 
-    def _read_handler(self, state: FileSystemState, args: ToolCallArguments) -> ToolExecResult:
-        path = args.get("path")
-        if not isinstance(path, str):
-            raise ValueError("Path is required for read and must be a string.")
-
-        target_file = resolve_path(state, path)
-        if not target_file.is_file():
-            raise FileNotFoundError(f"'{target_file}' is not a file or does not exist.")
-        
-        content = target_file.read_text()
-        return ToolExecResult(output=content)
+    # _read_handler REMOVED: use file_editor.view instead to avoid duplication
 
     def _lock_cwd_handler(self, state: FileSystemState) -> ToolExecResult:
         if state.phase == "edit":
             raise ToolError("Already in 'edit' phase.")
+        
+        # Find git repository root by walking up from the locked directory
+        current_dir = state.cwd
+        git_root = None
+        
+        while current_dir != current_dir.parent:  # Stop at filesystem root
+            if (current_dir / ".git").exists():
+                git_root = current_dir
+                break
+            current_dir = current_dir.parent
+        
+        # Store git root in state
+        state.git_root = git_root
         state.phase = "edit"
-        return ToolExecResult(
-            output=f"Phase changed to 'edit'. CWD is locked at {state.cwd}. Editing tools are now available."
-        )
+        
+        if git_root:
+            return ToolExecResult(
+                output=f"Phase changed to 'edit'. CWD is locked at {state.cwd}. Git repository found at {git_root}. Editing tools are now available."
+            )
+        else:
+            return ToolExecResult(
+                output=f"Phase changed to 'edit'. CWD is locked at {state.cwd}. ⚠️ WARNING: No git repository found in this directory or parent directories. Git diff functionality will not be available. Editing tools are now available."
+            )
 
     def _unlock_cwd_handler(self, state: FileSystemState) -> ToolExecResult:
         if state.phase == "discovery":

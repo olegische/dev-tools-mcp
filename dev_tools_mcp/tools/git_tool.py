@@ -1,11 +1,15 @@
 import os
+import logging
 from pathlib import Path
 from typing import override, Literal
 
 from dev_tools_mcp.models.session import FileSystemState
-from dev_tools_mcp.tools.base import Tool, ToolCallArguments, ToolExecResult, ToolParameter
+from dev_tools_mcp.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
 from dev_tools_mcp.tools.run import run
 from dev_tools_mcp.utils.path_utils import resolve_path
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 GitToolCommands = Literal["status", "diff", "add", "commit", "restore"]
 
@@ -27,7 +31,7 @@ class GitTool(Tool):
         - `diff`: Shows changes between commits, commit and working tree, etc.
         - `add`: Adds file contents to the index.
         - `commit`: Records changes to the repository.
-        - `restore`: Restores working tree files.
+        - `restore`: Restores working tree files to their last committed state (discards uncommitted changes).
         """
 
     @override
@@ -61,7 +65,13 @@ class GitTool(Tool):
             ToolParameter(
                 name="add_path",
                 type="string",
-                description="For `add` and `restore` commands. The path of files to add or restore. Defaults to '.' (all files).",
+                description="For `add` command. The path of files to add. Defaults to '.' (all files).",
+                required=False,
+            ),
+            ToolParameter(
+                name="restore_path",
+                type="string",
+                description="For `restore` command. The path of files to restore. Defaults to '.' (all files).",
                 required=False,
             ),
             ToolParameter(
@@ -88,6 +98,10 @@ class GitTool(Tool):
             return ToolExecResult(error="The 'path' parameter is required.", error_code=1)
 
         try:
+            # Check if we have a git repository in state
+            if not state.git_root:
+                return ToolExecResult(error="No git repository available. Use file_system.lock_cwd() in a directory that contains a git repository.", error_code=1)
+
             repo_path = resolve_path(state, path_str, must_be_relative=True)
             if not repo_path.is_dir():
                 return ToolExecResult(error=f"The provided path is not a directory: {repo_path}", error_code=1)
@@ -97,14 +111,12 @@ class GitTool(Tool):
             # and can lead to race conditions and unpredictable behavior.
             # This approach ensures that all operations are explicitly scoped to the correct repository.
             
-            # Check if it's a git repository without changing directory
-            is_git_repo_cmd = f"git -C {repo_path.as_posix()} rev-parse --is-inside-work-tree"
-            is_git_repo_code, _, is_git_repo_err = await run(is_git_repo_cmd)
-            if is_git_repo_code != 0:
-                return ToolExecResult(error=f"The directory is not a git repository: {repo_path}. Error: {is_git_repo_err}", error_code=1)
-
-            # Build the command with -C flag
-            base_cmd = f"git -C {repo_path.as_posix()}"
+            # Use the git root from state instead of checking if it's a git repo
+            git_root = state.git_root
+            # logger.debug(f"Using git root from state: {git_root}") # This line was removed as per the new_code
+            
+            # Build the command with -C flag using the git root from state
+            base_cmd = f"git -C {git_root.as_posix()}"
 
             match command:
                 case "status":
@@ -141,9 +153,9 @@ class GitTool(Tool):
                     cmd = f'{base_cmd} commit -m "{message}"'
 
                 case "restore":
-                    restore_path = arguments.get("add_path", ".")
+                    restore_path = arguments.get("restore_path", ".")
                     if not isinstance(restore_path, str):
-                        return ToolExecResult(error="The 'add_path' parameter for restore must be a string.", error_code=1)
+                        return ToolExecResult(error="The 'restore_path' parameter for restore must be a string.", error_code=1)
                     cmd = f"{base_cmd} restore {restore_path}"
                 
                 case _:

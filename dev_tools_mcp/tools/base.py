@@ -117,6 +117,8 @@ class Tool(ABC):
         """Execute the tool with given parameters."""
         pass
 
+
+
     def json_definition(self) -> dict[str, object]:
         return {
             "name": self.name,

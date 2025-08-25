@@ -4,6 +4,7 @@
 """JSON editing tool for structured JSON file modifications."""
 
 import json
+import logging
 from pathlib import Path
 from typing import override
 
@@ -12,11 +13,14 @@ from jsonpath_ng import parse as jsonpath_parse
 from jsonpath_ng.exceptions import JSONPathError
 
 from dev_tools_mcp.models.session import FileSystemState
-from dev_tools_mcp.tools.base import Tool, ToolCallArguments, ToolError, ToolExecResult, ToolParameter
-from dev_tools_mcp.utils.path_utils import resolve_path
+from dev_tools_mcp.tools.base import ToolCallArguments, ToolError, ToolExecResult, ToolParameter
+from dev_tools_mcp.tools.base_file_editor import BaseFileEditorTool
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 
-class JSONEditTool(Tool):
+class JSONEditTool(BaseFileEditorTool):
     """Tool for editing JSON files using JSONPath expressions."""
 
     def __init__(self, model_provider: str | None = None) -> None:
@@ -92,12 +96,8 @@ JSONPath syntax supported:
         ]
 
     @override
-    async def execute(self, arguments: ToolCallArguments) -> ToolExecResult:
+    async def _execute_operation(self, arguments: ToolCallArguments, fs_state: FileSystemState) -> ToolExecResult:
         """Execute the JSON edit operation."""
-        state = arguments.get("_fs_state")
-        if not isinstance(state, FileSystemState):
-            return ToolExecResult(error="FileSystemState not found in arguments.", error_code=-1)
-
         try:
             operation = str(arguments.get("operation", "")).lower()
             if not operation:
@@ -107,13 +107,18 @@ JSONPath syntax supported:
             if not file_path_str:
                 return ToolExecResult(error="file_path parameter is required", error_code=-1)
 
-            resolved_path = resolve_path(state, file_path_str, must_be_relative=True)
+            resolved_path = self._resolve_and_validate_path(file_path_str, fs_state, must_exist=True, allow_directories=False)
 
             json_path_arg = arguments.get("json_path")
             if json_path_arg is not None and not isinstance(json_path_arg, str):
                 return ToolExecResult(error="json_path parameter must be a string.", error_code=-1)
 
             value = arguments.get("value")
+
+            # Convert \n to actual newlines in value if it's a string
+            if isinstance(value, str):
+                value = value.replace('\\n', '\n')
+                logger.debug(f"Converted \\n to newlines in value parameter")
 
             pretty_print_arg = arguments.get("pretty_print", True)
             if not isinstance(pretty_print_arg, bool):
@@ -138,15 +143,15 @@ JSONPath syntax supported:
                     )
                 if operation == "set":
                     return await self._set_json_value(
-                        resolved_path, json_path_arg, value, pretty_print_arg
+                        resolved_path, json_path_arg, value, pretty_print_arg, fs_state
                     )
                 else:  # operation == "add"
                     return await self._add_json_value(
-                        resolved_path, json_path_arg, value, pretty_print_arg
+                        resolved_path, json_path_arg, value, pretty_print_arg, fs_state
                     )
 
             if operation == "remove":
-                return await self._remove_json_value(resolved_path, json_path_arg, pretty_print_arg)
+                return await self._remove_json_value(resolved_path, json_path_arg, pretty_print_arg, fs_state)
 
             return ToolExecResult(
                 error=f"Unknown operation: {operation}. Supported operations: view, set, add, remove",
@@ -156,34 +161,25 @@ JSONPath syntax supported:
         except Exception as e:
             return ToolExecResult(error=f"JSON edit tool error: {str(e)}", error_code=-1)
 
-    async def _load_json_file(self, file_path: Path) -> dict | list:
+    def _load_json_file(self, file_path: Path) -> dict | list:
         """Load and parse JSON file."""
-        if not file_path.exists():
-            raise ToolError(f"File does not exist: {file_path}")
-
+        content = self.read_file(file_path, self._fs_state).strip()
+        if not content:
+            raise ToolError(f"File is empty: {file_path}")
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    raise ToolError(f"File is empty: {file_path}")
-                return json.loads(content)
+            return json.loads(content)
         except json.JSONDecodeError as e:
             raise ToolError(f"Invalid JSON in file {file_path}: {str(e)}") from e
-        except Exception as e:
-            raise ToolError(f"Error reading file {file_path}: {str(e)}") from e
 
-    async def _save_json_file(
+    def _save_json_file(
         self, file_path: Path, data: dict | list, pretty_print: bool = True
     ) -> None:
         """Save JSON data to file."""
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                if pretty_print:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-                else:
-                    json.dump(data, f, ensure_ascii=False)
-        except Exception as e:
-            raise ToolError(f"Error writing to file {file_path}: {str(e)}") from e
+        if pretty_print:
+            content = json.dumps(data, indent=2, ensure_ascii=False)
+        else:
+            content = json.dumps(data, ensure_ascii=False)
+        self.write_file(file_path, content, self._fs_state)
 
     def _parse_jsonpath(self, json_path_str: str):
         """Parse JSONPath expression with error handling."""
@@ -198,7 +194,7 @@ JSONPath syntax supported:
         self, file_path: Path, json_path_str: str | None, pretty_print: bool
     ) -> ToolExecResult:
         """View JSON file content or specific paths."""
-        data = await self._load_json_file(file_path)
+        data = self._load_json_file(file_path)
 
         if json_path_str:
             jsonpath_expr = self._parse_jsonpath(json_path_str)
@@ -226,10 +222,10 @@ JSONPath syntax supported:
             return ToolExecResult(output=f"JSON content of {file_path}:\n{output}")
 
     async def _set_json_value(
-        self, file_path: Path, json_path_str: str, value, pretty_print: bool
+        self, file_path: Path, json_path_str: str, value, pretty_print: bool, fs_state: FileSystemState
     ) -> ToolExecResult:
         """Set value at specified JSONPath."""
-        data = await self._load_json_file(file_path)
+        data = self._load_json_file(file_path)
         jsonpath_expr = self._parse_jsonpath(json_path_str)
 
         matches = jsonpath_expr.find(data)
@@ -239,18 +235,21 @@ JSONPath syntax supported:
             )
 
         updated_data = jsonpath_expr.update(data, value)
-        await self._save_json_file(file_path, updated_data, pretty_print)
+        self._save_json_file(file_path, updated_data, pretty_print)
 
         match_count = len(matches)
-        return ToolExecResult(
-            output=f"Successfully updated {match_count} location(s) at JSONPath '{json_path_str}' with value: {json.dumps(value)}"
-        )
+        output_msg = f"Successfully updated {match_count} location(s) at JSONPath '{json_path_str}' with value: {json.dumps(value)}"
+        
+        # Add git diff if available
+        output_msg = await self._add_git_diff_to_output(output_msg, file_path, fs_state)
+            
+        return ToolExecResult(output=output_msg)
 
     async def _add_json_value(
-        self, file_path: Path, json_path_str: str, value, pretty_print: bool
+        self, file_path: Path, json_path_str: str, value, pretty_print: bool, fs_state: FileSystemState
     ) -> ToolExecResult:
         """Add value at specified JSONPath."""
-        data = await self._load_json_file(file_path)
+        data = self._load_json_file(file_path)
         jsonpath_expr = self._parse_jsonpath(json_path_str)
 
         parent_path = jsonpath_expr.left
@@ -284,14 +283,20 @@ JSONPath syntax supported:
                     error_code=-1,
                 )
 
-        await self._save_json_file(file_path, data, pretty_print)
-        return ToolExecResult(output=f"Successfully added value at JSONPath '{json_path_str}'")
+        self._save_json_file(file_path, data, pretty_print)
+        
+        output_msg = f"Successfully added value at JSONPath '{json_path_str}'"
+        
+        # Add git diff if available
+        output_msg = await self._add_git_diff_to_output(output_msg, file_path, fs_state)
+            
+        return ToolExecResult(output=output_msg)
 
     async def _remove_json_value(
-        self, file_path: Path, json_path_str: str, pretty_print: bool
+        self, file_path: Path, json_path_str: str, pretty_print: bool, fs_state: FileSystemState
     ) -> ToolExecResult:
         """Remove value at specified JSONPath."""
-        data = await self._load_json_file(file_path)
+        data = self._load_json_file(file_path)
         jsonpath_expr = self._parse_jsonpath(json_path_str)
 
         matches = jsonpath_expr.find(data)
@@ -325,7 +330,11 @@ JSONPath syntax supported:
                 except (KeyError, IndexError):
                     pass
 
-        await self._save_json_file(file_path, data, pretty_print)
-        return ToolExecResult(
-            output=f"Successfully removed {match_count} element(s) at JSONPath '{json_path_str}'"
-        )
+        self._save_json_file(file_path, data, pretty_print)
+        
+        output_msg = f"Successfully removed {match_count} element(s) at JSONPath '{json_path_str}'"
+        
+        # Add git diff if available
+        output_msg = await self._add_git_diff_to_output(output_msg, file_path, fs_state)
+            
+        return ToolExecResult(output=output_msg)

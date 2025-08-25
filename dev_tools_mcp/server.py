@@ -101,11 +101,18 @@ async def file_system_tool(
 ) -> dict[str, Any]:
     """
     Tool for exploring the file system and managing the session state.
-    This is the primary tool for the 'discovery' phase of the workflow.
-
+    
+    Provides commands for navigation (pwd, ls, cd) and session management (lock_cwd, unlock_cwd).
+    For reading files, use file_editor.view instead.
+    
     Args:
-        subcommand: The operation to perform. Can be 'pwd', 'ls', 'cd', 'read', 'lock_cwd', or 'unlock_cwd'.
-        path: The path for 'ls', 'cd', or 'read'. Can be relative or absolute.
+        subcommand: The operation to perform:
+            - 'pwd': Show current working directory
+            - 'ls': List files in directory
+            - 'cd': Change directory
+            - 'lock_cwd': Lock current directory for editing
+            - 'unlock_cwd': Unlock directory
+        path: The path for 'ls' or 'cd'. Can be relative or absolute.
 
     Returns:
         A dictionary containing the result of the operation.
@@ -142,8 +149,10 @@ async def directory_explorer_tool(
 ) -> dict[str, Any]:
     """
     Advanced tool for exploring directory structures with detailed information.
+    This tool works in BOTH 'discovery' and 'edit' phases - no locking required.
+    
     Provides comprehensive directory analysis including file listing, tree visualization,
-    and content searching.
+    and content searching. All operations are READ-ONLY and safe for discovery phase.
 
     Args:
         subcommand: The operation to perform. Can be 'list', 'tree', or 'search'.
@@ -235,6 +244,9 @@ async def file_editor_tool(
 ) -> dict[str, Any]:
     """
     A powerful tool for file manipulation (view, create, str_replace, insert).
+    
+    Use 'view' to read files and directories. Use other commands to edit files.
+    If editing fails, try calling file_system.lock_cwd() first.
 
     Args:
         command: The type of operation. Can be 'view', 'create', 'str_replace', or 'insert'.
@@ -253,8 +265,9 @@ async def file_editor_tool(
         session_manager = get_session_manager()
         session_id = context.request_context.request.query_params.get("session_id") or "default"
         state = session_manager.get_fs_state(session_id)
-        if state.phase != "edit":
-            raise ToolError("Cannot use the file_editor tool in 'discovery' phase. Use file_system.lock_cwd() first.")
+        # Allow 'view' command in both phases, but other commands require edit phase
+        if state.phase != "edit" and command != "view":
+            raise ToolError("Cannot use file editing commands in 'discovery' phase. Use file_system.lock_cwd() first. For reading files, use the 'view' command which works in both phases.")
 
         editor_tool = get_file_editor_tool_provider()
         args = {
@@ -291,6 +304,9 @@ async def json_editor(
 ) -> dict[str, Any]:
     """
     Tool for editing JSON files with JSONPath expressions.
+    
+    Supports viewing and editing JSON files with JSONPath syntax.
+    If editing fails, try calling file_system.lock_cwd() first.
 
     Args:
         operation: The operation to perform. Can be 'view', 'set', 'add', or 'remove'.
@@ -309,6 +325,10 @@ async def json_editor(
         state = session_manager.get_fs_state(session_id)
         if state.phase != "edit":
             raise ToolError("Cannot use the json_editor tool in 'discovery' phase. Use file_system.lock_cwd() first.")
+
+        # Warn if git repository is not available (but don't fail)
+        if not state.git_root:
+            logger.warning("No git repository found - git diff functionality will not be available")
 
         json_editor_tool = get_json_editor_tool_provider()
         args = {
@@ -390,7 +410,9 @@ async def git_tool(
 ) -> dict[str, Any]:
     """
     A comprehensive tool for interacting with a Git repository.
-    This tool is self-contained and operates on the specified repository path without changing the global working directory.
+    
+    Supports common git operations: status, diff, add, commit, restore.
+    Requires a git repository in the working directory.
 
     Args:
         command: The git command to execute. Must be one of: 'status', 'diff', 'add', 'commit', 'restore'.
@@ -410,6 +432,10 @@ async def git_tool(
         state = session_manager.get_fs_state(session_id)
         if state.phase != "edit":
             raise ToolError("Cannot use the git tool in 'discovery' phase. Use file_system.lock_cwd() first.")
+
+        # Check if git repository is available
+        if not state.git_root:
+            raise ToolError("Git tool is not available because no git repository was found when locking the directory. Use file_system.lock_cwd() in a directory that contains a git repository.")
 
         tool = get_git_tool_provider()
         args = {

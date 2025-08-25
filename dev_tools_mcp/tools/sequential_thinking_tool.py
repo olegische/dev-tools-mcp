@@ -294,11 +294,10 @@ You should:
                     self.branches[validated_input.branch_id] = []
                 self.branches[validated_input.branch_id].append(validated_input)
 
-            # Format and display the thought
-            # formatted_thought = self._format_thought(validated_input)
-            # print(formatted_thought, flush=True)  # Print to stdout for immediate feedback
+            # Format the thought for visual display
+            formatted_thought = self._format_thought(validated_input)
 
-            # Prepare response
+            # Prepare response data
             response_data = {
                 "thought_number": validated_input.thought_number,
                 "total_thoughts": validated_input.total_thoughts,
@@ -307,9 +306,10 @@ You should:
                 "thought_history_length": len(self.thought_history),
             }
 
-            return ToolExecResult(
-                output=f"Sequential thinking step completed.\n\nStatus:\n{json.dumps(response_data, indent=2)}"
-            )
+            # Include both formatted visual and structured data in response
+            output = f"{formatted_thought}\n\nStatus:\n{json.dumps(response_data, indent=2)}"
+
+            return ToolExecResult(output=output)
 
         except Exception as e:
             error_data = {"error": str(e), "status": "failed"}
